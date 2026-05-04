@@ -49,7 +49,7 @@ async def ask_claude(user_message):
     conversation_history.append({"role": "user", "content": user_message})
     trimmed = conversation_history[-40:]
     payload = {
-        "model": "claude-haiku-4-5-20251001",
+        "model": "claude-3-5-sonnet-20241022",
         "max_tokens": 1000,
         "system": SYSTEM_PROMPT,
         "messages": trimmed,
