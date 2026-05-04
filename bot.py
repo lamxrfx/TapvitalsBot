@@ -59,13 +59,22 @@ async def ask_claude(user_message):
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(ANTHROPIC_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-    reply = data["content"][0]["text"]
-    conversation_history.append({"role": "assistant", "content": reply})
-    return reply
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(ANTHROPIC_URL, headers=headers, json=payload)
+            logger.info(f"Anthropic status: {response.status_code}")
+            logger.info(f"Anthropic response: {response.text[:500]}")
+            response.raise_for_status()
+            data = response.json()
+        reply = data["content"][0]["text"]
+        conversation_history.append({"role": "assistant", "content": reply})
+        return reply
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
+        return f"❌ API error {e.response.status_code}: {e.response.text[:200]}"
+    except Exception as e:
+        logger.error(f"Claude error: {e}")
+        return f"❌ Error: {str(e)}"
 
 async def start(update, context):
     if not guard(update): return
@@ -169,8 +178,12 @@ async def ask_cmd(update, context):
 async def free_text(update, context):
     if not guard(update): return
     await update.message.chat.send_action("typing")
-    reply = await ask_claude(update.message.text)
-    await update.message.reply_text(reply)
+    try:
+        reply = await ask_claude(update.message.text)
+        await update.message.reply_text(reply)
+    except Exception as e:
+        logger.error(f"free_text error: {e}")
+        await update.message.reply_text(f"❌ Something went wrong: {str(e)}")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
