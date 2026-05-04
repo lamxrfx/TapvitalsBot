@@ -1,32 +1,25 @@
 import os
-import asyncio
 import logging
+import httpx
 from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
 )
-import anthropic
 
-# ── Logging ──────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Config ────────────────────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-ALLOWED_USER_ID  = int(os.environ.get("ALLOWED_USER_ID", "0"))  # Your Telegram user ID
+ALLOWED_USER_ID   = int(os.environ.get("ALLOWED_USER_ID", "0"))
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
-# ── In-memory store ───────────────────────────────────────────────────────────
-ideas    = []          # list of {text, timestamp}
-reminders = []         # list of {text, due: datetime, job_name}
-conversation_history = []   # Claude multi-turn memory
+ideas = []
+reminders = []
+conversation_history = []
 
 SYSTEM_PROMPT = """You are Piv — the sharp, no-nonsense AI business secretary for Lamar Morgan, a UK-based entrepreneur.
 
@@ -42,93 +35,81 @@ Your job:
 - Be a sharp sounding board when asked
 - Give concise, direct responses — no fluff, no filler
 - Speak like a smart, efficient secretary who knows the business inside out
-- When Lamar is thinking through something, push back constructively if needed
-- Keep responses short on mobile unless detail is asked for
+- Keep responses short on mobile unless detail is asked for"""
 
-You are NOT a generic chatbot. You know Lamar's businesses, his goals, and his time is valuable."""
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def ts() -> str:
+def ts():
     return datetime.now().strftime("%d %b %Y, %H:%M")
 
-def guard(update: Update) -> bool:
-    """Return False and warn if message is from an unauthorised user."""
+def guard(update):
     if ALLOWED_USER_ID and update.effective_user.id != ALLOWED_USER_ID:
         return False
     return True
 
-async def ask_claude(user_message: str) -> str:
-    """Send a message to Claude with full conversation history."""
+async def ask_claude(user_message):
     conversation_history.append({"role": "user", "content": user_message})
-    # Keep last 40 turns to stay within token limits
     trimmed = conversation_history[-40:]
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        system=SYSTEM_PROMPT,
-        messages=trimmed
-    )
-    reply = response.content[0].text
+    payload = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1000,
+        "system": SYSTEM_PROMPT,
+        "messages": trimmed,
+    }
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(ANTHROPIC_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+    reply = data["content"][0]["text"]
     conversation_history.append({"role": "assistant", "content": reply})
     return reply
 
-
-# ── Command Handlers ──────────────────────────────────────────────────────────
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
     if not guard(update): return
     await update.message.reply_text(
         "👋 *Piv online.* Your TapVitals secretary is ready.\n\n"
-        "Commands:\n"
         "/idea `[text]` — log an idea\n"
-        "/remind `[Xm/Xh/HH:MM]` `[text]` — set a reminder\n"
+        "/remind `[30m/2h/14:30]` `[text]` — set a reminder\n"
         "/notes — view all logged ideas\n"
         "/reminders — view upcoming reminders\n"
-        "/status — TapVitals build status briefing\n"
+        "/status — TapVitals build briefing\n"
         "/clear — clear conversation memory\n"
         "/ask `[question]` — ask me anything\n\n"
-        "Or just _talk_ — I'll respond as your secretary.",
+        "Or just _talk naturally_ — I'll respond as your secretary.",
         parse_mode="Markdown"
     )
 
-async def idea_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def idea_cmd(update, context):
     if not guard(update): return
     text = " ".join(context.args)
     if not text:
         await update.message.reply_text("Usage: /idea Your idea here")
         return
     ideas.append({"text": text, "timestamp": ts()})
-    await update.message.reply_text(f"✅ *Idea logged* — {ts()}\n_{text}_", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ *Idea logged*\n_{text}_", parse_mode="Markdown")
 
-async def notes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def notes_cmd(update, context):
     if not guard(update): return
     if not ideas:
-        await update.message.reply_text("No ideas logged yet. Use /idea to add one.")
+        await update.message.reply_text("No ideas logged yet.")
         return
     msg = "📋 *Your Ideas*\n\n"
     for i, idea in enumerate(ideas, 1):
         msg += f"{i}. _{idea['text']}_\n   `{idea['timestamp']}`\n\n"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remind_cmd(update, context):
     if not guard(update): return
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text(
-            "Usage: /remind [time] [text]\n\n"
-            "Time formats:\n"
-            "• `30m` — in 30 minutes\n"
-            "• `2h` — in 2 hours\n"
-            "• `14:30` — at 2:30 PM today",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("Usage: /remind [time] [text]\nFormats: `30m` · `2h` · `14:30`", parse_mode="Markdown")
         return
-
     time_str = args[0]
     reminder_text = " ".join(args[1:])
     now = datetime.now()
-
     try:
         if time_str.endswith("m"):
             due = now + timedelta(minutes=int(time_str[:-1]))
@@ -140,64 +121,42 @@ async def remind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if due < now:
                 due += timedelta(days=1)
         else:
-            raise ValueError("Unknown format")
-    except Exception:
-        await update.message.reply_text("❌ Couldn't parse that time. Try `30m`, `2h`, or `14:30`.", parse_mode="Markdown")
+            raise ValueError
+    except:
+        await update.message.reply_text("❌ Couldn't parse time. Try `30m`, `2h`, or `14:30`.", parse_mode="Markdown")
         return
-
     delay = (due - now).total_seconds()
-    job_name = f"reminder_{len(reminders)}"
+    context.job_queue.run_once(fire_reminder, when=delay, chat_id=update.effective_chat.id, data=reminder_text)
+    reminders.append({"text": reminder_text, "due": due})
+    await update.message.reply_text(f"⏰ *Reminder set*\n_{reminder_text}_\n`{due.strftime('%d %b, %H:%M')}`", parse_mode="Markdown")
 
-    context.job_queue.run_once(
-        fire_reminder,
-        when=delay,
-        chat_id=update.effective_chat.id,
-        name=job_name,
-        data=reminder_text
-    )
+async def fire_reminder(context):
+    await context.bot.send_message(chat_id=context.job.chat_id, text=f"🔔 *REMINDER*\n\n_{context.job.data}_", parse_mode="Markdown")
 
-    reminders.append({"text": reminder_text, "due": due, "job_name": job_name})
-    await update.message.reply_text(
-        f"⏰ *Reminder set*\n_{reminder_text}_\n`{due.strftime('%d %b, %H:%M')}`",
-        parse_mode="Markdown"
-    )
-
-async def fire_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Called by job queue when reminder is due."""
-    await context.bot.send_message(
-        chat_id=context.job.chat_id,
-        text=f"🔔 *REMINDER*\n\n_{context.job.data}_",
-        parse_mode="Markdown"
-    )
-
-async def reminders_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def reminders_cmd(update, context):
     if not guard(update): return
     now = datetime.now()
     upcoming = [r for r in reminders if r["due"] > now]
     if not upcoming:
-        await update.message.reply_text("No upcoming reminders. Use /remind to add one.")
+        await update.message.reply_text("No upcoming reminders.")
         return
     msg = "⏰ *Upcoming Reminders*\n\n"
     for r in sorted(upcoming, key=lambda x: x["due"]):
         msg += f"• _{r['text']}_\n  `{r['due'].strftime('%d %b, %H:%M')}`\n\n"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status_cmd(update, context):
     if not guard(update): return
-    prompt = (
-        "Give me a sharp TapVitals build status briefing based on what you know. "
-        "List: what's likely done, what's likely in progress, what still needs doing before launch. "
-        "Be concise — bullet points. Add a motivational closer."
-    )
-    reply = await ask_claude(prompt)
+    await update.message.chat.send_action("typing")
+    reply = await ask_claude("Give me a sharp TapVitals build status briefing. What's done, what's in progress, what still needs doing before launch. Bullet points. Add a motivational closer.")
     await update.message.reply_text(reply)
 
-async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def clear_cmd(update, context):
     if not guard(update): return
     conversation_history.clear()
-    await update.message.reply_text("🧹 Conversation memory cleared. Fresh start.")
+    await update.message.reply_text("🧹 Memory cleared. Fresh start.")
 
-async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_cmd(update, context):
     if not guard(update): return
     question = " ".join(context.args)
     if not question:
@@ -207,19 +166,14 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = await ask_claude(question)
     await update.message.reply_text(reply)
 
-async def free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle any plain message as a natural conversation."""
+async def free_text(update, context):
     if not guard(update): return
-    user_msg = update.message.text
     await update.message.chat.send_action("typing")
-    reply = await ask_claude(user_msg)
+    reply = await ask_claude(update.message.text)
     await update.message.reply_text(reply)
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-
     app.add_handler(CommandHandler("start",     start))
     app.add_handler(CommandHandler("idea",      idea_cmd))
     app.add_handler(CommandHandler("notes",     notes_cmd))
@@ -229,7 +183,6 @@ def main():
     app.add_handler(CommandHandler("clear",     clear_cmd))
     app.add_handler(CommandHandler("ask",       ask_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, free_text))
-
     logger.info("Piv is live 🟢")
     app.run_polling(drop_pending_updates=True)
 
