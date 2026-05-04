@@ -49,7 +49,7 @@ async def ask_claude(user_message):
     conversation_history.append({"role": "user", "content": user_message})
     trimmed = conversation_history[-40:]
     payload = {
-        "model": os.environ.get("MODEL_NAME", "claude-3-haiku-20240307"),,
+        MODEL_NAME = claude-3-haiku-20240307,
         "max_tokens": 1000,
         "system": SYSTEM_PROMPT,
         "messages": trimmed,
