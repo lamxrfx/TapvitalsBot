@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 ALLOWED_USER_ID   = int(os.environ.get("ALLOWED_USER_ID", "0"))
+MODEL             = os.environ.get("MODEL_NAME", "claude-3-haiku-20240307")
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
@@ -35,7 +37,8 @@ Your job:
 - Be a sharp sounding board when asked
 - Give concise, direct responses — no fluff, no filler
 - Speak like a smart, efficient secretary who knows the business inside out
-- Keep responses short on mobile unless detail is asked for"""
+- Keep responses short on mobile unless detail is asked for
+- When you receive a voice note transcription, treat it naturally as if Lamar just said it"""
 
 def ts():
     return datetime.now().strftime("%d %b %Y, %H:%M")
@@ -49,7 +52,7 @@ async def ask_claude(user_message):
     conversation_history.append({"role": "user", "content": user_message})
     trimmed = conversation_history[-40:]
     payload = {
-        MODEL_NAME = claude-3-haiku-20240307,
+        "model": MODEL,
         "max_tokens": 1000,
         "system": SYSTEM_PROMPT,
         "messages": trimmed,
@@ -63,7 +66,6 @@ async def ask_claude(user_message):
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(ANTHROPIC_URL, headers=headers, json=payload)
             logger.info(f"Anthropic status: {response.status_code}")
-            logger.info(f"Anthropic response: {response.text[:500]}")
             response.raise_for_status()
             data = response.json()
         reply = data["content"][0]["text"]
@@ -87,6 +89,7 @@ async def start(update, context):
         "/status — TapVitals build briefing\n"
         "/clear — clear conversation memory\n"
         "/ask `[question]` — ask me anything\n\n"
+        "🎤 *Voice notes supported*\n"
         "Or just _talk naturally_ — I'll respond as your secretary.",
         parse_mode="Markdown"
     )
@@ -178,12 +181,39 @@ async def ask_cmd(update, context):
 async def free_text(update, context):
     if not guard(update): return
     await update.message.chat.send_action("typing")
+    reply = await ask_claude(update.message.text)
+    await update.message.reply_text(reply)
+
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not guard(update): return
+    await update.message.chat.send_action("typing")
+    if not OPENAI_API_KEY:
+        await update.message.reply_text("🎤 Add `OPENAI_API_KEY` to Railway variables to enable voice notes.", parse_mode="Markdown")
+        return
     try:
-        reply = await ask_claude(update.message.text)
-        await update.message.reply_text(reply)
+        voice = update.message.voice
+        file = await context.bot.get_file(voice.file_id)
+        async with httpx.AsyncClient(timeout=30) as client:
+            audio_response = await client.get(file.file_path)
+            audio_bytes = audio_response.content
+        async with httpx.AsyncClient(timeout=60) as client:
+            transcribe_response = await client.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                files={"file": ("voice.ogg", audio_bytes, "audio/ogg")},
+                data={"model": "whisper-1"},
+            )
+            transcribe_response.raise_for_status()
+            transcript = transcribe_response.json().get("text", "").strip()
+        if transcript:
+            await update.message.reply_text(f"🎤 _\"{transcript}\"_", parse_mode="Markdown")
+            reply = await ask_claude(transcript)
+            await update.message.reply_text(reply)
+        else:
+            await update.message.reply_text("❌ Couldn't transcribe that. Try again or type it out.")
     except Exception as e:
-        logger.error(f"free_text error: {e}")
-        await update.message.reply_text(f"❌ Something went wrong: {str(e)}")
+        logger.error(f"Voice error: {e}")
+        await update.message.reply_text("❌ Voice note failed. Try typing instead.")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -195,6 +225,7 @@ def main():
     app.add_handler(CommandHandler("status",    status_cmd))
     app.add_handler(CommandHandler("clear",     clear_cmd))
     app.add_handler(CommandHandler("ask",       ask_cmd))
+    app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, free_text))
     logger.info("Piv is live 🟢")
     app.run_polling(drop_pending_updates=True)
