@@ -15,7 +15,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 ALLOWED_USER_ID   = int(os.environ.get("ALLOWED_USER_ID", "0"))
-MODEL             = os.environ.get("MODEL_NAME", "claude-3-haiku-20240307")
+MODEL             = "claude-3-haiku-20240307"
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
@@ -25,20 +25,19 @@ conversation_history = []
 
 SYSTEM_PROMPT = """You are Piv — the sharp, no-nonsense AI business secretary for Lamar Morgan, a UK-based entrepreneur.
 
-Lamar is currently finalising TapVitals: a UK emergency medical ID platform using NFC (Near Field Communication) wristbands (£19.99), cards (£12.99), and bundles (£24.99). It has a free tier, a TapVitals+ subscription, NHS-grade data infrastructure, and a long-term NHS/ambulance trust integration roadmap. The platform is being built in Lovable.
+Lamar is currently finalising TapVitals: a UK emergency medical ID platform using NFC wristbands (19.99), cards (12.99), and bundles (24.99). It has a free tier, a TapVitals+ subscription, NHS-grade data infrastructure, and a long-term NHS/ambulance trust integration roadmap. The platform is being built in Lovable.
 
 Lamar also runs:
-- Prop-firm forex trading on FTMO funded accounts (GBP/JPY and EUR/USD pairs) under Limiqo Ltd
-- Pivotal Trading — a trading education platform on Whop
-- PSS (Pivotal Swing System) Expert Advisor in MQL4 for MetaTrader 4 — built, awaiting backtesting
+- Prop-firm forex trading on FTMO funded accounts under Limiqo Ltd
+- Pivotal Trading on Whop
+- PSS Expert Advisor in MQL4 for MetaTrader 4
 
 Your job:
 - Take notes, log ideas, set reminders
 - Be a sharp sounding board when asked
-- Give concise, direct responses — no fluff, no filler
+- Give concise, direct responses
 - Speak like a smart, efficient secretary who knows the business inside out
-- Keep responses short on mobile unless detail is asked for
-- When you receive a voice note transcription, treat it naturally as if Lamar just said it"""
+- Keep responses short on mobile unless detail is asked for"""
 
 def ts():
     return datetime.now().strftime("%d %b %Y, %H:%M")
@@ -52,7 +51,7 @@ async def ask_claude(user_message):
     conversation_history.append({"role": "user", "content": user_message})
     trimmed = conversation_history[-40:]
     payload = {
-        "model": os.environ.get("MODEL_NAME", "claude-3-haiku-20240307"),
+        "model": MODEL,
         "max_tokens": 1000,
         "system": SYSTEM_PROMPT,
         "messages": trimmed,
@@ -73,25 +72,23 @@ async def ask_claude(user_message):
         return reply
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
-        return f"❌ API error {e.response.status_code}: {e.response.text[:200]}"
+        return f"API error {e.response.status_code}: {e.response.text[:200]}"
     except Exception as e:
         logger.error(f"Claude error: {e}")
-        return f"❌ Error: {str(e)}"
+        return f"Error: {str(e)}"
 
 async def start(update, context):
     if not guard(update): return
     await update.message.reply_text(
-        "👋 *Piv online.* Your TapVitals secretary is ready.\n\n"
-        "/idea `[text]` — log an idea\n"
-        "/remind `[30m/2h/14:30]` `[text]` — set a reminder\n"
-        "/notes — view all logged ideas\n"
-        "/reminders — view upcoming reminders\n"
-        "/status — TapVitals build briefing\n"
-        "/clear — clear conversation memory\n"
-        "/ask `[question]` — ask me anything\n\n"
-        "🎤 *Voice notes supported*\n"
-        "Or just _talk naturally_ — I'll respond as your secretary.",
-        parse_mode="Markdown"
+        "Piv online. Your TapVitals secretary is ready.\n\n"
+        "/idea [text] - log an idea\n"
+        "/remind [30m/2h/14:30] [text] - set a reminder\n"
+        "/notes - view all logged ideas\n"
+        "/reminders - view upcoming reminders\n"
+        "/status - TapVitals build briefing\n"
+        "/clear - clear conversation memory\n"
+        "/ask [question] - ask me anything\n\n"
+        "Or just talk naturally."
     )
 
 async def idea_cmd(update, context):
@@ -101,23 +98,23 @@ async def idea_cmd(update, context):
         await update.message.reply_text("Usage: /idea Your idea here")
         return
     ideas.append({"text": text, "timestamp": ts()})
-    await update.message.reply_text(f"✅ *Idea logged*\n_{text}_", parse_mode="Markdown")
+    await update.message.reply_text(f"Idea logged: {text}")
 
 async def notes_cmd(update, context):
     if not guard(update): return
     if not ideas:
         await update.message.reply_text("No ideas logged yet.")
         return
-    msg = "📋 *Your Ideas*\n\n"
+    msg = "Your Ideas:\n\n"
     for i, idea in enumerate(ideas, 1):
-        msg += f"{i}. _{idea['text']}_\n   `{idea['timestamp']}`\n\n"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        msg += f"{i}. {idea['text']} ({idea['timestamp']})\n"
+    await update.message.reply_text(msg)
 
 async def remind_cmd(update, context):
     if not guard(update): return
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("Usage: /remind [time] [text]\nFormats: `30m` · `2h` · `14:30`", parse_mode="Markdown")
+        await update.message.reply_text("Usage: /remind [time] [text]\nFormats: 30m, 2h, 14:30")
         return
     time_str = args[0]
     reminder_text = " ".join(args[1:])
@@ -135,15 +132,15 @@ async def remind_cmd(update, context):
         else:
             raise ValueError
     except:
-        await update.message.reply_text("❌ Couldn't parse time. Try `30m`, `2h`, or `14:30`.", parse_mode="Markdown")
+        await update.message.reply_text("Could not parse time. Try 30m, 2h, or 14:30")
         return
     delay = (due - now).total_seconds()
     context.job_queue.run_once(fire_reminder, when=delay, chat_id=update.effective_chat.id, data=reminder_text)
     reminders.append({"text": reminder_text, "due": due})
-    await update.message.reply_text(f"⏰ *Reminder set*\n_{reminder_text}_\n`{due.strftime('%d %b, %H:%M')}`", parse_mode="Markdown")
+    await update.message.reply_text(f"Reminder set: {reminder_text} at {due.strftime('%d %b, %H:%M')}")
 
 async def fire_reminder(context):
-    await context.bot.send_message(chat_id=context.job.chat_id, text=f"🔔 *REMINDER*\n\n_{context.job.data}_", parse_mode="Markdown")
+    await context.bot.send_message(chat_id=context.job.chat_id, text=f"REMINDER: {context.job.data}")
 
 async def reminders_cmd(update, context):
     if not guard(update): return
@@ -152,10 +149,10 @@ async def reminders_cmd(update, context):
     if not upcoming:
         await update.message.reply_text("No upcoming reminders.")
         return
-    msg = "⏰ *Upcoming Reminders*\n\n"
+    msg = "Upcoming Reminders:\n\n"
     for r in sorted(upcoming, key=lambda x: x["due"]):
-        msg += f"• _{r['text']}_\n  `{r['due'].strftime('%d %b, %H:%M')}`\n\n"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        msg += f"- {r['text']} at {r['due'].strftime('%d %b, %H:%M')}\n"
+    await update.message.reply_text(msg)
 
 async def status_cmd(update, context):
     if not guard(update): return
@@ -166,7 +163,7 @@ async def status_cmd(update, context):
 async def clear_cmd(update, context):
     if not guard(update): return
     conversation_history.clear()
-    await update.message.reply_text("🧹 Memory cleared. Fresh start.")
+    await update.message.reply_text("Memory cleared.")
 
 async def ask_cmd(update, context):
     if not guard(update): return
@@ -184,11 +181,11 @@ async def free_text(update, context):
     reply = await ask_claude(update.message.text)
     await update.message.reply_text(reply)
 
-async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def voice_handler(update, context):
     if not guard(update): return
     await update.message.chat.send_action("typing")
     if not OPENAI_API_KEY:
-        await update.message.reply_text("🎤 Add `OPENAI_API_KEY` to Railway variables to enable voice notes.", parse_mode="Markdown")
+        await update.message.reply_text("Add OPENAI_API_KEY to Railway variables to enable voice notes.")
         return
     try:
         voice = update.message.voice
@@ -206,14 +203,14 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             transcribe_response.raise_for_status()
             transcript = transcribe_response.json().get("text", "").strip()
         if transcript:
-            await update.message.reply_text(f"🎤 _\"{transcript}\"_", parse_mode="Markdown")
+            await update.message.reply_text(f'You said: "{transcript}"')
             reply = await ask_claude(transcript)
             await update.message.reply_text(reply)
         else:
-            await update.message.reply_text("❌ Couldn't transcribe that. Try again or type it out.")
+            await update.message.reply_text("Could not transcribe. Try again or type instead.")
     except Exception as e:
         logger.error(f"Voice error: {e}")
-        await update.message.reply_text("❌ Voice note failed. Try typing instead.")
+        await update.message.reply_text("Voice note failed. Try typing instead.")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -227,7 +224,7 @@ def main():
     app.add_handler(CommandHandler("ask",       ask_cmd))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, free_text))
-    logger.info("Piv is live 🟢")
+    logger.info("Piv is live")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
