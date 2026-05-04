@@ -15,7 +15,7 @@ TELEGRAM_TOKEN    = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 ALLOWED_USER_ID   = int(os.environ.get("ALLOWED_USER_ID", "0"))
-MODEL             = "claude-3-haiku-20240307"
+MODEL = os.environ.get("MODEL_NAME", "claude-haiku-4-5-20251001")
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 
